@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Water Ripple · Playground</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#0b1220;color:#e5eefb;font:14px/1.5 system-ui,sans-serif}header{padding:22px 28px;border-bottom:1px solid #26354b;display:flex;align-items:center;justify-content:space-between}h1{font-size:22px;margin:0}small,.muted{color:#97acc5}main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:24px;padding:24px}section,aside{min-width:0}canvas{display:block;width:100%;background:#14263a;cursor:crosshair;border-radius:12px}button,select,input{font:inherit;color:inherit;background:#15253b;border:1px solid #3b506e;border-radius:6px;padding:7px}button{cursor:pointer}button:hover{background:#294562}.primary{background:#146c71;border-color:#399f9d}nav{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}.panel{background:#101d30;border:1px solid #26354b;border-radius:12px;padding:18px;margin-bottom:16px}.control{margin-bottom:17px}.label{display:flex;align-items:center;justify-content:space-between;gap:10px}.label input{width:105px}input[type=range]{width:100%;padding:0;accent-color:#64d6cd}input[type=checkbox]{accent-color:#64d6cd}label small{display:block;margin-top:4px}h2{font-size:15px;margin:0 0 12px}textarea{width:100%;height:245px;resize:vertical;background:#081320;color:#9fe5d7;border:1px solid #34445e;border-radius:8px;padding:12px;font:12px/1.6 monospace}.status{color:#75d8cb}details{margin-top:18px}summary{cursor:pointer}code{color:#8adecf}.timeline{display:flex;gap:12px;align-items:center}.timeline input{flex:1}#error{color:#ffb0a6;white-space:pre-wrap}a{color:#88dfd5}@media(max-width:950px){main{grid-template-columns:1fr}header{display:block}aside{display:grid;grid-template-columns:1fr 1fr;gap:16px}}@media(max-width:600px){aside{display:block}main{padding:12px}}
+</style>
+<header><div><h1>Water Ripple <span class="muted">/ Playground</span></h1><small>Standalone WebGL · Natural refraction</small></div><span id="status" class="status">Loading shader…</span></header>
+<main><section>
+  <canvas id="preview" width="1200" height="720" aria-label="Set ripple center"></canvas>
+  <nav><button id="play" class="primary">▶ Replay</button><button id="pause">Pause</button><label><input id="loop" type="checkbox" checked> Loop</label><button id="current">Original preset</button><button id="slower">Slow & bold</button></nav>
+  <div class="timeline"><span id="time">0 ms</span><input id="scrub" aria-label="Timeline" type="range" min="0" max="1" step="0.001" value="0"><span id="progress">0%</span></div>
+  <p class="muted">Click the image to set the center. Sliders update immediately; number fields apply on Enter or blur. Upload a local image to compare.</p>
+  <div class="panel"><h2>Background</h2><input id="upload" type="file" accept="image/*" aria-label="Load image"><button id="resetImage">Reset image</button><p class="muted">Click the image to set the center. Sliders update immediately; number fields apply on Enter or blur. Upload a local image to compare.</p></div>
+  <details class="panel"><summary>How it works</summary><p>Natural mode uses the analytical slope of a radial height wave to approximate refraction. A weaker trailing packet, distance damping and independent fade produce a softer wake. Edge protection reduces stretched borders.</p><p>This is a screen-space approximation, not a fluid solver. Images stay in your browser.</p><a href="https://developer.nvidia.com/gpugems/gpugems/part-i-natural-effects/chapter-1-effective-water-simulation-physical-models">Reference: NVIDIA GPU Gems Chapter 1</a></details>
+  <p id="error" role="alert"></p>
+</section><aside>
+  <div class="panel"><h2>Ripple settings</h2><label>Model <select id="model"><option value="natural">Natural refraction</option><option value="original">Original distortion</option></select></label><nav><button id="natural">Natural preset</button></nav><div id="controls"></div><div class="control"><label>Propagation easing <select id="ease"><option value="SINUSOIDAL_OUT">SINUSOIDAL_OUT</option><option value="LINEAR">LINEAR</option><option value="SINUSOIDAL_IN_OUT">SINUSOIDAL_IN_OUT</option><option value="SINUSOIDAL_IN">SINUSOIDAL_IN</option></select></label><small class="muted">LINEAR = steady speed. OUT = fast start, slow finish.</small></div></div>
+  <div class="panel"><h2>Export settings</h2><textarea id="output" readonly aria-label="Configuration"></textarea><nav><button id="copy" class="primary">Copy settings</button><button id="save">Download JSON</button></nav><small>Natural mode needs natural.frag and the additional uniforms. Exported settings are not drop-in options for the old game service.</small></div>
+</aside></main>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const originalDefaults = {duration:650,amplitude:0.12,radiusEnd:1.2,waveWidth:0.08,frequency:90,centerX:0.5,centerY:0.5,ease:'SINUSOIDAL_OUT'};
+const naturalDefaults={...originalDefaults,duration:1500,amplitude:0.035,waveWidth:0.15,frequency:65,ease:'LINEAR',damping:1.5,fadePower:1.4,wake:0.35,edgeFade:0.04};
+const presets={original:originalDefaults,natural:naturalDefaults};
+let settings={...naturalDefaults},mode='natural';
+const naturalOnlyParameters=new Set(['damping','fadePower','wake','edgeFade']);
+const specs=[
+ ['duration','Duration (ms)',100,5000,50,'Higher = slower animation.'],
+ ['amplitude','Amplitude / Refraction strength',0,0.4,0.005,'Higher = stronger distortion.'],
+ ['radiusEnd','End radius',0.1,3,0.05,'Image-height units. Higher = faster travel at a fixed duration.'],
+ ['waveWidth','Wave width / Packet width',0.005,0.4,0.005,'Width of the affected wave band.'],
+ ['frequency','Frequency / Spatial frequency',0,200,1,'Higher = more densely packed ripples.'],
+ ['damping','Distance damping (Natural)',0,8,0.1,'Weakens distant waves.'],
+ ['fadePower','Fade exponent (Natural)',0.2,4,0.1,'Lower = longer lasting ripples.'],
+ ['wake','Trailing wave (Natural)',0,1,0.05,'Strength of the slower trailing packet.'],
+ ['edgeFade','Edge protection (Natural)',0,0.2,0.005,'Suppresses distortion near image borders.'],
+ ['centerX','Center X',0,1,0.01,'0 = left, 1 = right.'],
+ ['centerY','Center Y',0,1,0.01,'0 = top, 1 = bottom.']
+];
+for(const [key,title,min,max,step,help] of specs){
+ const row=document.createElement('div');row.className='control';
+ row.dataset.parameter=key;
+ row.innerHTML=`<label for="${key}"><span class="label"><span>${title}</span><input id="${key}" type="number" min="${min}" max="${max}" step="${step}" value="${settings[key]}"></span><small>${help}</small></label><input id="${key}Range" aria-label="${title} slider" type="range" min="${min}" max="${max}" step="${step}" value="${settings[key]}">`;
+ $('controls').appendChild(row);
+ for(const id of [key,key+'Range']) $(id).addEventListener(id===key?'change':'input',()=>{const value=$(id).valueAsNumber;if(!Number.isFinite(value))return;settings[key]=Math.min(max,Math.max(min,value));sync();restart();});
+}
+let start=0,elapsed=0,running=true,ready=false;
+function sync(){
+ for(const [key] of specs){$(key).value=settings[key];$(key+'Range').value=settings[key];}
+ document.querySelectorAll('[data-parameter]').forEach(row=>{row.hidden=mode==='original'&&naturalOnlyParameters.has(row.dataset.parameter);});
+ $('ease').value=settings.ease;
+ $('output').value=JSON.stringify(exportSettings(),null,2);
+}
+function exportSettings(){
+ const result={model:mode,duration:settings.duration,amplitude:settings.amplitude,radiusEnd:settings.radiusEnd,waveWidth:settings.waveWidth,frequency:settings.frequency,centerX:settings.centerX,centerY:settings.centerY,ease:settings.ease};
+ return mode==='natural'?{...result,damping:settings.damping,fadePower:settings.fadePower,wake:settings.wake,edgeFade:settings.edgeFade}:result;
+}
+function applyMode(nextMode){
+ mode=nextMode;$('model').value=mode;settings={...presets[mode]};
+ if(ready){program=programs[mode];gl.useProgram(program);locate();}
+ sync();restart();
+}
+function restart(){elapsed=0;start=performance.now();running=true;$('pause').textContent='Pause';}
+$('ease').onchange=()=>{settings.ease=$('ease').value;sync();restart();};
+$('play').onclick=restart;
+$('pause').onclick=()=>{running=!running;if(running)start=performance.now()-elapsed;$('pause').textContent=running?'Pause':'Resume';};
+$('scrub').oninput=()=>{running=false;elapsed=Number($('scrub').value)*settings.duration;$('pause').textContent='Resume';};
+$('current').onclick=()=>applyMode('original');
+$('slower').onclick=()=>{settings={...settings,duration:1800,amplitude:mode==='natural'?0.055:0.16,waveWidth:0.16};sync();restart();};
+$('copy').onclick=async()=>{try{await navigator.clipboard.writeText($('output').value);$('copy').textContent='Copied';setTimeout(()=>$('copy').textContent='Copy settings',1500);}catch{$('output').focus();$('output').select();$('error').textContent='Press Ctrl+C to copy.';}};
+$('save').onclick=()=>{const url=URL.createObjectURL(new Blob([JSON.stringify(exportSettings(),null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='water-ripple-settings.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+const canvas=$('preview');
+canvas.onclick=e=>{const r=canvas.getBoundingClientRect();settings.centerX=Number(((e.clientX-r.left)/r.width).toFixed(3));settings.centerY=Number(((e.clientY-r.top)/r.height).toFixed(3));sync();restart();};
+const gl=canvas.getContext('webgl',{preserveDrawingBuffer:true});
+let program,texture,uniforms;const programs={};
+function locate(){uniforms=Object.fromEntries(['u_Sampler','u_Center','u_Radius','u_Amplitude','u_WaveWidth','u_Frequency','u_Aspect','u_Progress','u_Damping','u_FadePower','u_Wake','u_EdgeFade'].map(key=>[key,gl.getUniformLocation(program,key)]));}
+$('model').onchange=()=>applyMode($('model').value);
+$('natural').onclick=()=>applyMode('natural');
+function compile(type,source){const shader=gl.createShader(type);gl.shaderSource(shader,source);gl.compileShader(shader);if(!gl.getShaderParameter(shader,gl.COMPILE_STATUS))throw new Error(gl.getShaderInfoLog(shader));return shader;}
+function setImage(image){
+ const scale=Math.min(1,1600/image.width,1000/image.height);canvas.width=Math.round(image.width*scale);canvas.height=Math.round(image.height*scale);
+ gl.bindTexture(gl.TEXTURE_2D,texture);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,image);gl.viewport(0,0,canvas.width,canvas.height);restart();
+}
+function defaultImage(){
+ const c=document.createElement('canvas');c.width=1200;c.height=720;const ctx=c.getContext('2d');
+ const gradient=ctx.createLinearGradient(0,0,1200,720);gradient.addColorStop(0,'#104257');gradient.addColorStop(1,'#061422');ctx.fillStyle=gradient;ctx.fillRect(0,0,1200,720);
+ ctx.strokeStyle='#346277';ctx.lineWidth=1;for(let x=0;x<1200;x+=30){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,720);ctx.stroke();}for(let y=0;y<720;y+=30){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(1200,y);ctx.stroke();}
+ ctx.fillStyle='#d6f6ec';ctx.font='bold 26px sans-serif';ctx.fillText('RIPPLE TEST SURFACE',44,54);ctx.font='16px sans-serif';ctx.fillText('Straight edges + fine grid reveal refraction',44,83);
+ const labels=['STONE','REEDS','WATER','LIGHT','SAND'];const colors=['#d49bfd','#79e3d0','#f4c879','#fb999c','#87b9ff'];
+ for(let row=0;row<3;row++)for(let col=0;col<5;col++){const x=40+col*226,y=120+row*184;ctx.fillStyle='#112d40';ctx.fillRect(x,y,210,164);ctx.strokeStyle=colors[col];ctx.lineWidth=3;ctx.strokeRect(x+6,y+6,198,152);ctx.fillStyle=colors[col];ctx.beginPath();ctx.arc(x+105,y+67,37,0,Math.PI*2);ctx.fill();ctx.fillStyle='#102536';ctx.textAlign='center';ctx.font='bold 30px sans-serif';ctx.fillText(String(16+col),x+105,y+78);ctx.fillStyle='#e5eefb';ctx.font='bold 18px sans-serif';ctx.fillText(labels[col],x+105,y+132);}
+ return c;
+}
+$('upload').onchange=()=>{const file=$('upload').files[0];if(!file||!ready)return;const url=URL.createObjectURL(file);const image=new Image();image.onload=()=>{setImage(image);URL.revokeObjectURL(url);};image.onerror=()=>{URL.revokeObjectURL(url);$('error').textContent='Cannot load image. Use PNG, JPEG or WebP.';};image.src=url;};
+$('resetImage').onclick=()=>{if(ready)setImage(defaultImage());$('upload').value='';};
+function ease(t){switch(settings.ease){case 'SINUSOIDAL_OUT':return Math.sin(t*Math.PI/2);case 'SINUSOIDAL_IN':return 1-Math.cos(t*Math.PI/2);case 'SINUSOIDAL_IN_OUT':return (1-Math.cos(Math.PI*t))/2;default:return t;}}
+function frame(now){
+ if(running){elapsed=now-start;if(elapsed>settings.duration+500){if($('loop').checked){restart();}else{elapsed=settings.duration;running=false;$('pause').textContent='Resume';}}}
+ const t=Math.min(1,Math.max(0,elapsed/settings.duration)),e=ease(t);
+ gl.uniform2f(uniforms.u_Center,settings.centerX,settings.centerY);gl.uniform1f(uniforms.u_Radius,settings.radiusEnd*e);gl.uniform1f(uniforms.u_Amplitude,mode==='original'?settings.amplitude*(1-e):settings.amplitude);gl.uniform1f(uniforms.u_WaveWidth,settings.waveWidth);gl.uniform1f(uniforms.u_Frequency,settings.frequency);gl.uniform1f(uniforms.u_Aspect,canvas.width/canvas.height);gl.uniform1f(uniforms.u_Progress,t);gl.uniform1f(uniforms.u_Damping,settings.damping);gl.uniform1f(uniforms.u_FadePower,settings.fadePower);gl.uniform1f(uniforms.u_Wake,settings.wake);gl.uniform1f(uniforms.u_EdgeFade,settings.edgeFade);gl.drawArrays(gl.TRIANGLES,0,6);
+ $('scrub').value=t;$('time').textContent=Math.round(t*settings.duration)+' ms';$('progress').textContent=Math.round(t*100)+'%';requestAnimationFrame(frame);
+}
+async function init(){
+ if(!gl)throw new Error('WebGL unavailable. Enable hardware acceleration.');
+ for(const model of ['original','natural']){
+ const response=await fetch('/'+model+'.frag');if(!response.ok)throw new Error(await response.text());const fragment=await response.text();
+ program=gl.createProgram();gl.attachShader(program,compile(gl.VERTEX_SHADER,'attribute vec2 position; varying vec2 v_TexCoord; void main(){gl_Position=vec4(position,0.,1.);v_TexCoord=vec2((position.x+1.)*.5,(1.-position.y)*.5);}'));gl.attachShader(program,compile(gl.FRAGMENT_SHADER,fragment));gl.bindAttribLocation(program,0,'position');gl.linkProgram(program);if(!gl.getProgramParameter(program,gl.LINK_STATUS))throw new Error(gl.getProgramInfoLog(program));programs[model]=program;
+ }
+ program=programs[mode];gl.useProgram(program);
+ const buffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]),gl.STATIC_DRAW);const position=gl.getAttribLocation(program,'position');gl.enableVertexAttribArray(position);gl.vertexAttribPointer(position,2,gl.FLOAT,false,0,0);
+ locate();
+ texture=gl.createTexture();gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,texture);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.uniform1i(uniforms.u_Sampler,0);
+ setImage(defaultImage());ready=true;window.ripplePlayground={settings:()=>({...settings}),ready:true};$('status').textContent='● Standalone shaders ready';requestAnimationFrame(frame);
+}
+sync();init().catch(error=>{$('error').textContent=error.stack||error.message;$('status').textContent='Loading failed';});
+</script>
+</html>
