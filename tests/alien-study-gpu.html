@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Alien A/B/C GPU regression</title>
+<style>body{font:15px system-ui;background:#101b26;color:#deecf5;padding:24px}canvas{width:384px;max-width:100%;image-rendering:pixelated;border:1px solid #4a7184}pre{white-space:pre-wrap}.pass{color:#77e4ad}.fail{color:#ff9292}</style></head>
+<body><h1>Alien A/B/C GPU regression</h1><p id="summary">Running…</p><canvas id="gpu" width="192" height="108"></canvas><pre id="report"></pre>
+<script type="module">
+import { effects } from '../dist/effects/catalog.js';
+import { alienStudies } from '../dist/effects/alienStudy.js';
+import { defaults, normalize, frameUniforms } from '../dist/core/types.js';
+
+const canvas=document.getElementById('gpu');
+const gl=canvas.getContext('webgl',{alpha:true,premultipliedAlpha:true,preserveDrawingBuffer:true,antialias:false});
+const results={status:'running',renderer:null,tests:[],draws:0,stressFrames:0,opaquePixels:0,failures:[]};
+window.__alienGpuResults=results;
+const summary=document.getElementById('summary'),report=document.getElementById('report');
+function assert(condition,message){if(!condition)throw Error(message);}
+async function test(name,fn){
+ const start=performance.now();
+ try{const details=await fn();results.tests.push({name,status:'pass',milliseconds:Math.round(performance.now()-start),details});}
+ catch(error){const message=String(error);results.tests.push({name,status:'fail',message});results.failures.push({name,message});}
+ report.textContent=JSON.stringify(results,null,2);
+}
+function compile(type,source){const shader=gl.createShader(type);gl.shaderSource(shader,source);gl.compileShader(shader);if(!gl.getShaderParameter(shader,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(shader));return shader;}
+function program(fragment){
+ const vertex=compile(gl.VERTEX_SHADER,'attribute vec2 position;varying vec2 v_TexCoord;void main(){gl_Position=vec4(position,0.,1.);v_TexCoord=(position+1.)*.5;}');
+ const shader=compile(gl.FRAGMENT_SHADER,fragment),p=gl.createProgram();
+ gl.attachShader(p,vertex);gl.attachShader(p,shader);gl.bindAttribLocation(p,0,'position');gl.linkProgram(p);gl.deleteShader(vertex);gl.deleteShader(shader);
+ assert(gl.getProgramParameter(p,gl.LINK_STATUS),gl.getProgramInfoLog(p));return p;
+}
+const programs=new Map(),locations=new Map();let plain,texture;
+function source(width,height,transparent=false){
+ canvas.width=width;canvas.height=height;gl.viewport(0,0,width,height);
+ const pixels=new Uint8Array(width*height*4);
+ for(let y=0;y<height;y++)for(let x=0;x<width;x++){
+  const i=4*(y*width+x),alpha=transparent?(x<width/3?0:x<2*width/3?128:255):255;
+  pixels[i]=Math.round((x+.5)/width*alpha);pixels[i+1]=Math.round((y+.5)/height*alpha);pixels[i+2]=Math.round(alpha*.6);pixels[i+3]=alpha;
+ }
+ gl.bindTexture(gl.TEXTURE_2D,texture);gl.pixelStorei(gl.UNPACK_ALIGNMENT,1);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,width,height,0,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
+}
+function render(effect,settings={},progress=.3){
+ const p=effect?programs.get(effect.id):plain;gl.useProgram(p);
+ if(effect){
+  const cache=locations.get(effect.id);
+  for(const [key,value] of Object.entries(frameUniforms(effect,{...defaults(effect),...settings},progress,canvas.width/canvas.height))){
+   if(!cache.has(key))cache.set(key,gl.getUniformLocation(p,'u_'+key));
+   gl.uniform1f(cache.get(key),value);
+  }
+ }
+ gl.uniform1i(gl.getUniformLocation(p,'u_Sampler'),0);gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT);gl.drawArrays(gl.TRIANGLES,0,6);
+ const pixels=new Uint8Array(canvas.width*canvas.height*4);gl.readPixels(0,0,canvas.width,canvas.height,gl.RGBA,gl.UNSIGNED_BYTE,pixels);results.draws++;
+ assert(gl.getError()===gl.NO_ERROR,'WebGL error after draw/readPixels');return pixels;
+}
+function maxDifference(a,b){let max=0;for(let i=0;i<a.length;i++)max=Math.max(max,Math.abs(a[i]-b[i]));return max;}
+function differenceAt(a,b,x,y,channel=0){return a[4*(y*canvas.width+x)+channel]-b[4*(y*canvas.width+x)+channel];}
+function yieldUI(){return new Promise(resolve=>setTimeout(resolve,0));}
+
+try{
+ assert(gl,'WebGL is unavailable');
+ results.renderer=gl.getParameter(gl.RENDERER);gl.disable(gl.BLEND);gl.disable(gl.DITHER);
+ const buffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]),gl.STATIC_DRAW);gl.enableVertexAttribArray(0);gl.vertexAttribPointer(0,2,gl.FLOAT,false,0,0);
+ texture=gl.createTexture();gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,texture);
+ for(const [key,value] of [[gl.TEXTURE_MIN_FILTER,gl.LINEAR],[gl.TEXTURE_MAG_FILTER,gl.LINEAR],[gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE],[gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE]])gl.texParameteri(gl.TEXTURE_2D,key,value);
+ await test('All 11 effect shaders compile and link',()=>{
+  assert(effects.length===11,`Expected 11 effects, got ${effects.length}`);
+  for(const effect of effects){programs.set(effect.id,program(effect.fragment));locations.set(effect.id,new Map());}
+  plain=program('precision highp float;uniform sampler2D u_Sampler;varying vec2 v_TexCoord;void main(){gl_FragColor=texture2D(u_Sampler,v_TexCoord);}');
+  return {compiled:programs.size};
+ });
+ assert(programs.size===11&&plain,'Compilation must pass before pixel tests');
+ await test('A/B/C: endpoints and zero master strength preserve opaque and transparent sources',()=>{
+  let compared=0,max=0;
+  for(const transparent of [false,true]){source(192,108,transparent);const original=render(null);
+   for(const effect of alienStudies)for(const [progress,settings] of [[0,{}],[1,{}],[.37,{strength:0}]]){
+    const diff=maxDifference(original,render(effect,settings,progress));max=Math.max(max,diff);assert(diff<=1,`${effect.id}: identity difference ${diff}, t=${progress}`);compared++;
+   }
+  }
+  return {compared,maxChannelDifference:max};
+ });
+ await test('A/B/C: opaque edge safety across aspect, corner centers and extreme parameter ranges',async()=>{
+  let maxAlphaDeficit=0;
+  for(const [width,height] of [[192,108],[128,128],[108,192]]){
+   source(width,height);
+   for(const effect of alienStudies){
+    const preset=defaults(effect),maximal=Object.fromEntries(effect.parameters.map(p=>[p.key,p.max]));
+    const cases=[preset,{...preset,...maximal,duration:1100,easing:0,travelSpeed:1.65,waveWidth:1.5},{...preset,...maximal,duration:1100,easing:0,travelSpeed:1.65,waveWidth:.04}];
+    for(const options of cases)for(const [centerX,centerY] of [[.5,.5],[0,0],[1,0],[0,1],[1,1]])for(const progress of [.03,.18,.42,.75,.97]){
+     const pixels=render(effect,{...options,centerX,centerY},progress);
+     for(let i=3;i<pixels.length;i+=4)maxAlphaDeficit=Math.max(maxAlphaDeficit,255-pixels[i]);
+     results.stressFrames++;results.opaquePixels+=pixels.length/4;
+     assert(maxAlphaDeficit===0,`${effect.id}: opaque alpha hole at ${width}x${height}, center ${centerX},${centerY}, t=${progress}`);
+     if(results.stressFrames%20===0){summary.textContent=`Running… ${results.stressFrames} stress frames`;await yieldUI();}
+    }
+   }
+  }
+  return {frames:results.stressFrames,opaquePixels:results.opaquePixels,maxAlphaDeficit};
+ });
+ await test('B with broad refraction disabled equals A; C without detail equals B',()=>{
+  source(192,108);const [a,b,c]=alienStudies;let max=0,compared=0;
+  for(const progress of [.07,.18,.32,.57,.83])for(const settings of [{},{centerX:.3,centerY:.4,strength:2.2,waveWidth:.85}]){
+   for(const [left,right,label] of [[render(a,settings,progress),render(b,{...settings,broadStrength:0},progress),'B broad=0 / A'],[render(b,settings,progress),render(c,{...settings,detailStrength:0},progress),'C detail=0 / B']]){
+    const diff=maxDifference(left,right);max=Math.max(max,diff);assert(diff<=1,`${label}: channel difference ${diff} at t=${progress}`);compared++;
+   }
+  }
+  return {compared,maxChannelDifference:max};
+ });
+ await test('Enabled broad and fine layers each make a measurable image difference',()=>{
+  source(192,108);const [a,b,c]=alienStudies,progress=.25;
+  const ab=maxDifference(render(a,{},progress),render(b,{},progress));
+  const bc=maxDifference(render(b,{},progress),render(c,{},progress));
+  assert(ab>1,`Broad layer appears inactive (${ab})`);assert(bc>1,`Detail layer appears inactive (${bc})`);
+  return {broadMaxChannelDifference:ab,detailMaxChannelDifference:bc};
+ });
+ await test('Outside the moving annulus, all three versions leave the source unchanged',()=>{
+  source(192,108);const original=render(null);let checked=0,max=0;
+  for(const effect of alienStudies)for(const progress of [.12,.35,.65]){
+   const settings=defaults(effect),uniforms=frameUniforms(effect,settings,progress,canvas.width/canvas.height),front=uniforms.phase*settings.duration*.001*settings.travelSpeed;
+   const pixels=render(effect,{},progress);
+   for(let y=0;y<canvas.height;y++)for(let x=0;x<canvas.width;x++){
+    const px=((x+.5)/canvas.width-settings.centerX)*uniforms.aspect,py=(y+.5)/canvas.height-settings.centerY;
+    if(Math.abs(Math.hypot(px,py)-front)<settings.waveWidth*.5+.002)continue;
+    for(let channel=0;channel<4;channel++){const index=4*(y*canvas.width+x)+channel;max=Math.max(max,Math.abs(pixels[index]-original[index]));}checked++;
+   }
+  }
+  assert(max<=1,`Pixels outside wave support changed by ${max}`);return {pixelsChecked:checked,maxChannelDifference:max};
+ });
+ await test('A: radial wave has opposite displacement signs across its wavefront',()=>{
+  source(256,256);const original=render(null),a=alienStudies[0];
+  const settings={centerX:.5,centerY:.5,duration:1000,travelSpeed:1,waveWidth:.30,radialStrength:.07,strength:1,easing:0};
+  const progress=.25,pixels=render(a,settings,progress),y=127;
+  const innerX=Math.round((.5+.25-.075)*256-.5),outerX=Math.round((.5+.25+.075)*256-.5);
+  const inner=differenceAt(pixels,original,innerX,y),outer=differenceAt(pixels,original,outerX,y);
+  assert(inner>2&&outer<-2,`Expected positive inner / negative outer UV offsets, got ${inner}/${outer}`);
+  return {innerRedDelta:inner,outerRedDelta:outer,pixelPositions:[innerX,outerX]};
+ });
+ await test('A: the radial displacement lobes propagate outward over time',()=>{
+  source(256,256);const original=render(null),a=alienStudies[0];
+  const settings={centerX:.25,centerY:.5,duration:1000,travelSpeed:1,waveWidth:.24,radialStrength:.04,easing:0};
+  const peaks=[];
+  for(const progress of [.15,.30]){
+   const pixels=render(a,settings,progress);let peakX=-1,best=-1;
+   for(let x=65;x<240;x++){const delta=differenceAt(pixels,original,x,127);if(delta>best){best=delta;peakX=x;}}
+   assert(best>2,`No visible inner lobe at ${progress}`);peaks.push({progress,x:peakX,delta:best});
+  }
+  const moved=peaks[1].x-peaks[0].x,expected=.15*256;
+  assert(Math.abs(moved-expected)<7,`Expected about ${expected}px outward travel, got ${moved}`);
+  return {peaks,pixelsMoved:moved,expectedPixels:expected};
+ });
+ await test('A: interior radial offset follows the waveform without global boundary attenuation',()=>{
+  source(256,256);const a=alienStudies[0],settings={centerX:.5,centerY:.5,duration:1000,travelSpeed:1,waveWidth:.3,radialStrength:.04,strength:1,easing:0},progress=.20;
+  const pixels=render(a,settings,progress),x=194,y=127,uvX=(x+.5)/256,uvY=(y+.5)/256;
+  const px=uvX-.5,py=uvY-.5,r=Math.hypot(px,py),waveX=2*(r-progress)/settings.waveWidth;
+  const wave=1.25*Math.sin(Math.PI*waveX)*(1-waveX*waveX),offset=-px/r*wave*settings.radialStrength;
+  const expected=(uvX+offset)*255,actual=pixels[4*(y*256+x)];
+  assert(Math.abs(actual-expected)<=2,`Interior sample expected ${expected}, got ${actual}`);
+  return {expectedRed:expected,actualRed:actual,rawUvOffset:offset};
+ });
+ await test('A/B/C: transparent source remains premultiplied and is not forced opaque',()=>{
+  source(192,108,true);const metrics=[];
+  for(const effect of alienStudies){const pixels=render(effect,{},.28);let transparent=0,opaque=0,partial=0;
+   for(let i=0;i<pixels.length;i+=4){const alpha=pixels[i+3];if(alpha===0)transparent++;else if(alpha===255)opaque++;else partial++;
+    assert(pixels[i]<=alpha+1&&pixels[i+1]<=alpha+1&&pixels[i+2]<=alpha+1,`${effect.id}: non-premultiplied pixel`);
+   }
+   assert(transparent>0&&opaque>0&&partial>0,`${effect.id}: lost source alpha regions`);metrics.push({id:effect.id,transparent,partial,opaque});
+  }
+  return metrics;
+ });
+}catch(error){results.failures.push({name:'Test setup',message:String(error)});}
+results.status=results.failures.length?'fail':'pass';
+summary.className=results.status;
+summary.textContent=`${results.status.toUpperCase()}: ${results.tests.filter(t=>t.status==='pass').length}/${results.tests.length} tests; ${results.stressFrames} stress frames; ${results.draws} draws`;
+report.textContent=JSON.stringify(results,null,2);
+window.dispatchEvent(new CustomEvent('alien-gpu-complete',{detail:results}));
+</script></body></html>

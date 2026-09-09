@@ -1,0 +1,10 @@
+import { ripple } from './ripple.js';
+import { natural } from './natural.js';
+import { heat } from './heat.js';
+import { shine } from './shine.js';
+import { dissolve } from './dissolve.js';
+import { energy } from './energy.js';
+import { vortex } from './vortex.js';
+import { alien } from './alien.js';
+import { alienStudies } from './alienStudy.js';
+export const effects = [ripple, natural, alien, ...alienStudies, heat, shine, dissolve, energy, vortex];
