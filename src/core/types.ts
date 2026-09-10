@@ -1,4 +1,5 @@
 export interface Parameter {
+  options?: string[];
   key: string; label: string; min: number; max: number; step: number; value: number; help: string;
 }
 export interface EffectDefinition {

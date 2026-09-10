@@ -94,6 +94,19 @@ function controls() {
         const title = document.createElement('span');
         title.textContent = p.label;
         label.append(title);
+        if (p.options) {
+            const choice = document.createElement('select');
+            choice.id = 'param-' + p.key;
+            p.options.forEach((text, value) => { const option = document.createElement('option'); option.value = String(value); option.textContent = text; choice.append(option); });
+            choice.value = String(Math.round(settings[p.key]));
+            choice.onchange = () => { settings = normalize(active, { ...settings, [p.key]: Number(choice.value) }); sync(); replay(); };
+            const help = document.createElement('small');
+            help.textContent = p.help;
+            label.append(choice);
+            row.append(label, help);
+            root.append(row);
+            continue;
+        }
         const number = document.createElement('input');
         number.type = 'number';
         number.id = 'param-' + p.key;
