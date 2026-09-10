@@ -1,6 +1,6 @@
 import { normalize } from './core/types.js';
 import { thirdPartyNotices } from './core/thirdPartyNotices.js';
-import { servicePatch } from './core/serviceIntegration.js';
+import { screenInfrastructure, screenServicePatch, screenRegistrationPatch } from './core/screenIntegration.js';
 function objectLiteral(value) {
     return JSON.stringify(value, null, 2).replace(/"([A-Za-z_][A-Za-z0-9_]*)":/g, '$1:');
 }
@@ -50,7 +50,16 @@ export class ${name} extends ShaderPass {
     this.init();
   }
   public get settings(): Required<${name}Options> { return { ...this._settings }; }
-  public configure(options: ${name}Options): void {
+${effect.id === 'alien-b' ? `  public setScreenInput(width: number, height: number, centerX: number, centerY: number): void {
+    if (![width, height, centerX, centerY].every(Number.isFinite) || width <= 0 || height <= 0) {
+      return;
+    }
+    this.aspect = width / height;
+    this._settings.centerX = centerX;
+    this._settings.centerY = centerY;
+    this.update();
+  }
+` : ''}  public configure(options: ${name}Options): void {
     (Object.keys(DEFAULTS) as (keyof ${name}Options)[]).forEach(key => {
       const value = options[key];
       if (value !== undefined && Number.isFinite(value)) {
@@ -80,36 +89,54 @@ export function integrationFiles(effect, input) {
     files['copy-to-game/' + folder + name + '.ts'] = standaloneShader(effect, options);
     files['current-preset.json'] = JSON.stringify({ effect: effect.id, parameters: options }, null, 2);
     files['THIRD_PARTY_NOTICES.txt'] = thirdPartyNotices;
-    files['manifest.json'] = JSON.stringify({ formatVersion: 2, effect: effect.id, className: name, serviceApi: isBroad ? 'playAlienBroadRefraction' : null, servicePatchBase: isBroad ? '813501db75c72190b66256c44c47cdad24850b33' : null }, null, 2);
+    files['manifest.json'] = JSON.stringify({ formatVersion: 3, effect: effect.id, className: name,
+        serviceApi: isBroad ? 'playAlienBroadRefractionScreen' : null,
+        coordinateContract: isBroad ? 'whole-game-input-height-v1' : null,
+        engineVersion: isBroad ? '4.7.2' : null, plasmaVersion: isBroad ? '1.7.14' : null,
+        servicePatchBase: isBroad ? '813501db75c72190b66256c44c47cdad24850b33' : null }, null, 2);
     if (isBroad) {
-        files['integration/GameScreenEffectService.patch'] = servicePatch;
+        for (const [path, source] of Object.entries(screenInfrastructure))
+            files['copy-to-game/' + path] = source;
+        files['integration/GameScreenEffectService.patch'] = screenServicePatch;
+        files['integration/SlotGame.patch'] = screenRegistrationPatch;
         files['examples/service-usage.md'] = `Use the existing injected IGameScreenEffectService:
 
 \`\`\`ts
-const globalCenter = this.localToGlobalXY({ x: this.width / 2, y: this.height / 2 });
-await this._screenEffectService.playAlienBroadRefraction(globalCenter, ScreenEffectScope.GameplayAndUi);
+// Match the preview center using RENDERER dimensions, not this scene's layout size.
+// Import Application from 'engine-api/system/application/Application'.
+const size = Application.engine.platform.dimensions.value;
+const globalCenter = { x: size.width * ${options.centerX}, y: size.height * ${options.centerY} };
+await this._screenEffectService.playAlienBroadRefractionScreen(globalCenter);
 // Optional overrides:
-void this._screenEffectService.playAlienBroadRefraction(globalCenter, ScreenEffectScope.GameplayOnly, { strength: 1.2 });
-this._screenEffectService.stopAlienBroadRefraction(ScreenEffectScope.GameplayAndUi);
+void this._screenEffectService.playAlienBroadRefractionScreen(globalCenter, { strength: 1.2 });
+this._screenEffectService.seekAlienBroadRefractionScreen(0.3); // pauses for comparison
+this._screenEffectService.stopAlienBroadRefractionScreen();
+// For a symbol-centred effect, use symbol.localToGlobalXY(...) instead.
+// Previous per-layer mode remains available:
+void this._screenEffectService.playAlienBroadRefraction(globalCenter, ScreenEffectScope.GameplayAndUi);
 \`\`\`
 
-Same-kind playback replaces the previous effect on each target. Ripple can coexist.
+Switching Alien modes stops the other Alien mode. Ripple can coexist; stop it for a clean comparison.
 Completion and explicit stop both resolve the Promise. The service owns cleanup.
 Do not keep a disposed target registered. Call deregisterTarget before target destruction.
-Screen-wide distortion needs target layers containing the intended background.
+Whole-screen mode processes the complete live game root, including visible menus/UI.
+It has no GameplayOnly/UiOnly scope. External DOM/platform UI is not captured.
 `;
         files['README.md'] = `# Alien Broad Refraction — game integration
 
 1. Copy the contents of copy-to-game into your game root.
-2. If the service already exposes playAlienBroadRefraction, update service imports to read the preset and options from AlienBroadRefractionShaderPass, then skip the patch. The separate Preset.ts file is no longer needed.
+2. If the service already exposes playAlienBroadRefractionScreen, retain its integration and update the generated shader/infrastructure. Having only playAlienBroadRefraction is NOT sufficient.
 3. Otherwise, from the game root run git apply --check PATH/integration/GameScreenEffectService.patch, then git apply PATH/integration/GameScreenEffectService.patch.
 4. The patch targets commit 813501db75c72190b66256c44c47cdad24850b33. If the check fails, merge the service changes manually; never overwrite your whole service.
-5. Follow examples/service-usage.md. Existing service registration and injection are reused.
+5. Pass the game root and renderer dimensions into the service constructor in SlotGame: new GameScreenEffectService(this._sceneManager, this, Application.engine.platform.dimensions). integration/SlotGame.patch shows this change; check before applying it.
+6. Follow examples/service-usage.md. Existing service registration and injection are reused. Never replace your whole service or SlotGame with a downloaded snapshot.
 
 The generated ShaderPass is self-contained apart from engine-api. It does not need playground sources or npm packages.
-Current numerical parameters are baked into ALIEN_BROAD_REFRACTION_PRESET inside the class file. Game calls determine center and aspect; preview centers are retained in current-preset.json only for reference.
+Current numerical parameters are baked into ALIEN_BROAD_REFRACTION_PRESET inside the class file. The example includes the CURRENT preview center; the compositor supplies the actual input aspect.
+The three screen infrastructure files are shared runtime integration, not copies of other effects. A fresh game needs them once; review local changes before updating them.
+This integration is tested with engine 4.7.2 / Plasma 1.7.14. Fixed capture uses autoSize=false, a one-unit inset and pad=1 because a covering frame takes Plasma's auto-bounds branch. Verify this contract when upgrading the renderer.
 UFO.png is a preview asset and is not included in this code archive.
-Validate target bounds, alpha and orientation in your game.
+For parity, use the same input picture, aspect, centre, settings and frozen progress. Live moving artwork will naturally look different from a static image.
 `;
     }
     else {

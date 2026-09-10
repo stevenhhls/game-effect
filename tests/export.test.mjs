@@ -26,6 +26,12 @@ test('Alien B package includes service patch and typed preset with caller-contro
  assert.doesNotMatch(preset,/Array<keyof/);
  assert.match(files['integration/GameScreenEffectService.patch'],/playAlienBroadRefraction/);
  assert.match(files['integration/GameScreenEffectService.patch'],/stopAlienBroadRefraction/);
- assert.match(files['README.md'],/skip the patch/);
- assert.equal(Object.keys(files).filter(name=>name.startsWith('copy-to-game/')).length,1);
+ assert.match(files['README.md'],/playAlienBroadRefractionScreen/);
+ assert.equal(Object.keys(files).filter(name=>name.startsWith('copy-to-game/')).length,4);
+ assert.equal(JSON.parse(files['manifest.json']).coordinateContract,'whole-game-input-height-v1');
+ assert.match(files['integration/SlotGame.patch'],/Application.engine.platform.dimensions/);
+ assert.match(files['examples/service-usage.md'],/size.width \* 0.21/);
+ assert.match(files['examples/service-usage.md'],/size.height \* 0.41/);
+ assert.match(preset,/setScreenInput/);
+ assert.match(files['copy-to-game/src/utils/services/screenEffectService/ScreenEffectCompositor.ts'],/screenCaptureInset/);
 });

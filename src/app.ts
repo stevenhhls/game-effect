@@ -4,6 +4,8 @@ import { mergeComparison, comparisonVariants } from './core/comparison.js';
 import { integrationFiles } from './exportIntegration.js';
 import { EffectDefinition, Settings, defaults, normalize, frameUniforms } from './core/types.js';
 import { zipFiles } from './zip.js';
+import { backgroundSize, validateBackgroundFile } from './core/background.js';
+import { gameReference, matchesGameReference } from './core/gameReference.js';
 const el=<T extends HTMLElement>(id:string):T=>document.getElementById(id) as T;
 const input=(id:string):HTMLInputElement=>el<HTMLInputElement>(id);
 const canvas=el<HTMLCanvasElement>('preview');
@@ -42,6 +44,9 @@ function program(fragment:string):WebGLProgram{
 }
 function configuration():object{return {version:1,effect:active.id,className:active.className,parameters:settings};}
 function sync():void{
+ el('referenceStatus').textContent=matchesGameReference(active.id,settings)
+  ? 'Matches game reference parameters · Center: 896, 547.2 in 1280 × 720 (0.70, 0.76).'
+  : 'Custom parameters — click Match game reference for an exact parameter comparison.';
  el<HTMLTextAreaElement>('output').value=JSON.stringify(configuration(),null,2);
  memory[active.id]={...settings};
  if(isAlienStudy(active)){
@@ -86,9 +91,42 @@ function select(effect:EffectDefinition):void{
  controls();if(!keepFrame)replay();
 }
 function upload(image:HTMLCanvasElement|HTMLImageElement):void{
- const scale=Math.min(1,1600/image.width,1000/image.height);canvas.width=Math.max(1,Math.round(image.width*scale));canvas.height=Math.max(1,Math.round(image.height*scale));
- gl.bindTexture(gl.TEXTURE_2D,texture);gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,true);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);
- gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,image);gl.viewport(0,0,canvas.width,canvas.height);replay();
+ const width=image instanceof HTMLImageElement?image.naturalWidth:image.width;
+ const height=image instanceof HTMLImageElement?image.naturalHeight:image.height;
+ const size=backgroundSize(width,height,gl.getParameter(gl.MAX_TEXTURE_SIZE));
+ const resized=document.createElement('canvas');resized.width=size.width;resized.height=size.height;
+ resized.getContext('2d')!.drawImage(image,0,0,size.width,size.height);
+ const next=gl.createTexture();if(!next)throw new Error('Unable to allocate the background texture.');
+ gl.bindTexture(gl.TEXTURE_2D,next);
+ gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+ gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+ gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,true);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);
+ gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,resized);
+ if(gl.getError()!==gl.NO_ERROR){gl.deleteTexture(next);gl.bindTexture(gl.TEXTURE_2D,texture);throw new Error('Unable to load this image into WebGL.');}
+ gl.deleteTexture(texture);texture=next;
+ canvas.width=size.width;canvas.height=size.height;gl.viewport(0,0,size.width,size.height);replay();
+}
+let backgroundRequest=0,backgroundName='UFO.png (default)';
+async function changeBackground(source:File|string='UFO.png'):Promise<void>{
+ const request=++backgroundRequest;
+ const file=typeof source==='string'?undefined:source;
+ let objectUrl:string|undefined;
+ try{
+  if(file)validateBackgroundFile(file);
+  el('backgroundStatus').textContent='Loading background…';
+  const image=new Image();
+  image.src=file?(objectUrl=URL.createObjectURL(file)):'./'+source;
+  await image.decode();
+  if(request!==backgroundRequest)return;
+  upload(image);backgroundName=file?file.name:String(source);
+  el('backgroundStatus').textContent=backgroundName+' · '+canvas.width+' × '+canvas.height;
+  el('backgroundError').textContent='';
+ }catch(error){
+  if(request===backgroundRequest){
+   el('backgroundStatus').textContent=backgroundName;
+   el('backgroundError').textContent=error instanceof Error&&error.name!=='EncodingError'?error.message:'Unable to decode this image. Choose another PNG, JPG or WebP.';
+  }
+ }finally{if(objectUrl)URL.revokeObjectURL(objectUrl);}
 }
 function download(blob:Blob,name:string):void{const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 async function downloadCode():Promise<void>{
@@ -119,7 +157,33 @@ el('reset').onclick=()=>{
 el('play').onclick=replay;
 el('pause').onclick=()=>{running=!running;if(running)start=performance.now()-elapsed;el('pause').textContent=running?'Pause':'Resume';};
 input('scrub').oninput=()=>{elapsed=input('scrub').valueAsNumber*settings.duration;running=false;el('pause').textContent='Resume';};
+el('gameReference').onclick=()=>{
+ if(!ready)return;
+ const effect=effects.find(e=>e.id==='alien-b')!;
+ select(effect);settings=normalize(effect,{...gameReference});controls();replay();
+};
+for(const button of document.querySelectorAll<HTMLButtonElement>('[data-progress]')){
+ button.onclick=()=>{
+  if(!ready)return;
+  elapsed=Number(button.dataset.progress)*settings.duration;running=false;el('pause').textContent='Resume';
+ };
+}
 el('download').onclick=()=>void downloadCode();
+input('backgroundFile').onchange=()=>{
+ const file=input('backgroundFile').files?.[0];
+ input('backgroundFile').value=''; // Allow choosing the same file again.
+ if(ready&&file)void changeBackground(file);
+};
+el<HTMLSelectElement>('backgroundSelect').onchange=()=>{
+ const value=el<HTMLSelectElement>('backgroundSelect').value;
+ el('customBackground').hidden=value!=='custom';
+ if(ready&&value!=='custom')void changeBackground(value);
+};
+el('defaultBackground').onclick=()=>{
+ if(!ready)return;
+ el<HTMLSelectElement>('backgroundSelect').value='UFO.png';el('customBackground').hidden=true;
+ void changeBackground();
+};
 el('json').onclick=()=>download(new Blob([JSON.stringify(configuration(),null,2)],{type:'application/json'}),'fx-'+active.id+'.json');
 canvas.onclick=event=>{
  if(!('centerX' in settings))return;
@@ -148,6 +212,9 @@ try{
  texture=gl.createTexture()!;gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,texture);
  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
  const background=new Image();background.src='./UFO.png';await background.decode();upload(background);
+ el('backgroundStatus').textContent=backgroundName+' · '+canvas.width+' × '+canvas.height;
+ input('backgroundFile').disabled=false;el<HTMLButtonElement>('defaultBackground').disabled=false;
+ el<HTMLSelectElement>('backgroundSelect').disabled=false;
  ready=true;select(active);el('status').textContent='● '+effects.length+' shaders compiled';el<HTMLButtonElement>('download').disabled=false;requestAnimationFrame(frame);
 }catch(error){report(error);el('status').textContent='Preview unavailable';}
 }

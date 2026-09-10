@@ -5,7 +5,7 @@ const server=http.createServer((req,res)=>{
   try {
     const pathname=new URL(req.url,'http://localhost').pathname;
     const name=pathname==='/'?'index.html':pathname.slice(1);
-    if(!(['index.html','style.css','UFO.png','original.frag','natural.frag','tests/alien-study-gpu.html'].includes(name) || /^dist\/[a-zA-Z0-9_/-]+\.js$/.test(name))) {
+    if(!(['index.html','style.css','UFO.png','bbb2.png','original.frag','natural.frag','tests/alien-study-gpu.html'].includes(name) || /^dist\/[a-zA-Z0-9_/-]+\.js$/.test(name))) {
       res.writeHead(404); return res.end('Not found');
     }
     const file=path.join(__dirname,name);

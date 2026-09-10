@@ -15,7 +15,12 @@
 <div class="canvas-wrap"><canvas id="preview" width="1200" height="720" aria-label="Effect preview: click to set center"></canvas></div>
 <div class="transport"><button id="play" class="primary">▶ Replay</button><button id="pause">Pause</button><label><input type="checkbox" id="loop" checked> Loop</label><label><input type="checkbox" id="compare"> Original / FX split</label><span id="time">0 ms</span></div>
 <label class="timeline-label">Timeline <input id="scrub" type="range" min="0" max="1" step="0.001" value="0"></label>
-<p class="muted">Fixed reference background: UFO.png. Click the preview to place the effect center.</p>
+<div class="transport"><button id="gameReference">Match game reference (Alien B)</button><button data-progress="0.2">Freeze 20%</button><button data-progress="0.4">Freeze 40%</button><button data-progress="0.6">Freeze 60%</button></div>
+<p id="referenceStatus" role="status" class="muted"></p>
+<p class="muted">Freeze stops the effect at the selected progress, not the background animation. At 1100 ms: 20% = 220 ms, 40% = 440 ms, 60% = 660 ms. Use the same full-frame 16:9 game image; matching parameters does not verify the image or crop.</p>
+<div class="assets"><label for="backgroundSelect">Background</label><select id="backgroundSelect" disabled><option value="UFO.png">UFO</option><option value="bbb2.png">bbb2</option><option value="custom">Upload custom image…</option></select><label id="customBackground" class="upload" for="backgroundFile" hidden>Choose image<input id="backgroundFile" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" disabled></label><button id="defaultBackground" disabled>Reset background</button><span id="backgroundStatus" role="status">UFO.png (default)</span></div>
+<p class="muted">PNG, JPG or WebP · up to 20 MB · images stay in your browser and are not uploaded. Changing backgrounds keeps effect parameters. Refresh restores UFO.png. Click the preview to place the effect center.</p>
+<p id="backgroundError" role="alert"></p>
 <p class="muted">Alien A/B/C share common parameters. Settings are stored in this browser. Download includes the selected standalone ShaderPass; Alien B includes service integration.</p>
 <details><summary>Game integration</summary><p>Alien B exports a standalone ShaderPass, current preset and a patch for GameScreenEffectService. Use playAlienBroadRefraction(globalPoint, scope, options). Other effects export standalone passes without a named service API. The reference image is not included in code downloads.</p></details>
 <p id="error" role="alert"></p>
