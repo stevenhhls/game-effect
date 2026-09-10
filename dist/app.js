@@ -1,4 +1,6 @@
 import { effects } from './effects/catalog.js';
+import { setupPanelResize } from './core/panelResize.js';
+setupPanelResize();
 import { alienStudies, alienDetailed, isAlienStudy } from './effects/alienStudy.js';
 import { mergeComparison, comparisonVariants } from './core/comparison.js';
 import { integrationFiles } from './exportIntegration.js';

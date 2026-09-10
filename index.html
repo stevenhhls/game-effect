@@ -25,6 +25,6 @@
 <details><summary>Game integration</summary><p>Alien B exports a standalone ShaderPass, current preset and a patch for GameScreenEffectService. Use playAlienBroadRefraction(globalPoint, scope, options). Other effects export standalone passes without a named service API. The reference image is not included in code downloads.</p></details>
 <p id="error" role="alert"></p>
 </section>
-<aside><div class="panel"><div class="panel-title"><h2>Parameters</h2><button id="reset">Reset preset</button></div><div id="controls"></div></div><div class="panel"><h2>Current configuration</h2><textarea id="output" aria-label="Current configuration" readonly></textarea><button id="json">↓ Settings JSON</button><p id="downloadStatus" role="status"></p></div></aside>
+<aside><div class="panel parameters-panel"><div class="panel-title"><h2 id="parametersTitle">Parameters</h2><button id="reset">Reset preset</button></div><div id="controls" role="region" aria-labelledby="parametersTitle" tabindex="0"></div></div><details class="panel configuration-panel"><summary>Current configuration</summary><textarea id="output" aria-label="Current configuration" readonly></textarea><button id="json">↓ Settings JSON</button><p id="downloadStatus" role="status"></p></details></aside>
 </main><script type="module" src="./dist/app.js"></script>
 </body></html>
