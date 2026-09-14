@@ -1,9 +1,12 @@
 # Automatic Codex PR review pilot
 
 This repository is a pilot for native Codex GitHub pull request reviews using an
-existing ChatGPT Business account. It has no OpenAI API key, paid API workflow,
-or GitHub Actions review job. Automatic triggering is configured in Codex, not
-by a repository file.
+existing ChatGPT Business account. It has no OpenAI API key or paid API workflow.
+Automatic triggering is configured in Codex, not by a repository file.
+
+The `Codex review gate` workflow waits for the native Codex review summary for
+the latest PR commit. Add its check name as a required status check in a GitHub
+Ruleset for the target branch to block merging while the review is running.
 
 ## One-time setup
 
@@ -15,6 +18,10 @@ by a repository file.
 5. Ensure this repository is available to the ChatGPT Codex Connector. If GitHub
    shows repository access controls, allow this repository only.
 6. Commit `AGENTS.md` with this file, then open a pull request on GitHub.
+7. In GitHub, open **Settings → Rulesets**, create an active branch ruleset for
+   the target branch, enable **Require status checks to pass before merging**,
+   and add `Codex review gate` after it has run once. Also require a human
+   approval and resolved conversations.
 
 ## Acceptance
 
