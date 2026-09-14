@@ -42,7 +42,7 @@ export function setupPanelResize():void {
    widths[index]=Math.max(index===0?130:240,Math.min(requested,available()-widths[1-index]-320));apply();
   };
   const finish=()=>{if(!drag)return;drag=undefined;document.body.classList.remove('resizing-panels');save();};
-  handle.onpointerup=finish;handle.onpointercancel=finish;handle.onlostpointercapture=finish;
+  handle.onpointerup=finish;handle.onlostpointercapture=finish;
   handle.ondblclick=()=>{widths=[195,325];apply();save();};
   handle.onkeydown=event=>{
    if(event.key!=='ArrowLeft'&&event.key!=='ArrowRight')return;

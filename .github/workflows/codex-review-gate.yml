@@ -1,0 +1,83 @@
+name: Codex review gate
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  await-codex-review:
+    name: Codex review gate
+    if: >-
+      (github.event_name == 'pull_request' && github.event.pull_request.draft == false) ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request != null &&
+       contains(github.event.comment.body, '@codex review'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+
+    steps:
+      - name: Wait for Codex to review the latest commit
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const pullNumber = context.eventName === 'pull_request'
+              ? context.payload.pull_request.number
+              : context.payload.issue.number;
+            const { owner, repo } = context.repo;
+            const timeoutMs = 45 * 60 * 1000;
+            const pollMs = 20 * 1000;
+            const startedAt = Date.now();
+
+            const sleep = (milliseconds) => new Promise((resolve) => {
+              setTimeout(resolve, milliseconds);
+            });
+
+            while (Date.now() - startedAt < timeoutMs) {
+              const { data: pull } = await github.rest.pulls.get({
+                owner,
+                repo,
+                pull_number: pullNumber,
+              });
+              const headSha = pull.head.sha;
+              const shortSha = headSha.slice(0, 7);
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner,
+                repo,
+                issue_number: pullNumber,
+                per_page: 100,
+              });
+              const summaries = comments
+                .filter((comment) =>
+                  comment.user?.login?.includes('chatgpt-codex-connector') &&
+                  /Codex Review Summary/i.test(comment.body || '') &&
+                  (comment.body || '').includes(shortSha),
+                )
+                .sort((left, right) =>
+                  new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime(),
+                );
+              const summary = summaries[0];
+              const body = summary?.body || '';
+
+              if (/Completed/i.test(body)) {
+                core.info(`Codex completed review for ${headSha}.`);
+                return;
+              }
+              if (/Failed|Cancelled|Timed out/i.test(body)) {
+                core.setFailed(`Codex review did not complete for ${headSha}.`);
+                return;
+              }
+
+              core.info(`Waiting for Codex review of ${headSha}.`);
+              await sleep(pollMs);
+            }
+
+            core.setFailed(
+              'Timed out waiting for Codex review. Request it with "@codex review" and rerun this check.',
+            );

@@ -113,7 +113,7 @@ function upload(image:HTMLCanvasElement|HTMLImageElement):void{
  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,true);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);
  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,resized);
  if(gl.getError()!==gl.NO_ERROR){gl.deleteTexture(next);gl.bindTexture(gl.TEXTURE_2D,texture);throw new Error('Unable to load this image into WebGL.');}
- gl.deleteTexture(texture);texture=next;
+ texture=next;
  canvas.width=size.width;canvas.height=size.height;gl.viewport(0,0,size.width,size.height);replay();
 }
 let backgroundRequest=0,backgroundName='UFO.png (default)';
