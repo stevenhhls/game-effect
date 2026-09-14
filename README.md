@@ -1,5 +1,12 @@
 # Shader FX Studio
 
+## Codex PR review pilot
+
+This repository contains [Codex review rules](AGENTS.md) and a
+[setup and acceptance guide](CODEX-PR-REVIEW.md) for native GitHub PR review.
+The cloud setting must be enabled separately; committing these files alone does
+not activate automatic review.
+
 Independent English-language TypeScript playground for six FX families:
 - Ripple / shockwave (Original, Natural, legacy Alien and three Alien A/B/C comparison variants)
 - Heat haze / wobble
